@@ -1,0 +1,55 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: var(--font-body), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+
+  --color-paper: #f7f5ef;
+  --color-card: #fffefb;
+  --color-ink: #1d2a24;
+  --color-muted: #5f6b64;
+  --color-line: #e2dfd4;
+  --color-brand: #1f6f54;
+  --color-brand-dark: #175741;
+  --color-brand-soft: #e1f0e8;
+  --color-amber: #8a5a00;
+  --color-amber-soft: #fbf0d6;
+  --color-danger: #a8321f;
+  --color-danger-soft: #fae8e4;
+}
+
+body {
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+
+dialog::backdrop {
+  background: rgb(29 42 36 / 0.45);
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-line bg-card px-3.5 py-2 text-sm font-medium text-ink transition-colors hover:bg-paper disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply border-brand bg-brand text-white hover:bg-brand-dark;
+  }
+  .btn-danger {
+    @apply border-danger/30 text-danger hover:bg-danger-soft;
+  }
+  .field {
+    @apply w-full rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink;
+  }
+  .label {
+    @apply mb-1 block text-sm font-medium;
+  }
+  .card {
+    @apply rounded-xl border border-line bg-card;
+  }
+}

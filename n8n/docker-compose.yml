@@ -1,0 +1,72 @@
+# Run from this directory:  cp .env.example .env  (fill it in)  &&  docker compose up -d
+name: lendloop-n8n
+
+x-n8n-environment: &n8n-environment
+  N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?Set N8N_ENCRYPTION_KEY in n8n/.env}
+  GENERIC_TIMEZONE: UTC
+  N8N_DIAGNOSTICS_ENABLED: "false"
+  N8N_VERSION_NOTIFICATIONS_ENABLED: "false"
+  N8N_PERSONALIZATION_ENABLED: "false"
+  # Plain http on localhost only. Remove behind TLS.
+  N8N_SECURE_COOKIE: "false"
+  WEBHOOK_URL: ${N8N_PUBLIC_URL:-http://localhost:5678/}
+  # Keep failed executions for debugging, then let them age out (they may hold personal data).
+  EXECUTIONS_DATA_PRUNE: "true"
+  EXECUTIONS_DATA_MAX_AGE: "168"
+  # Code nodes need HMAC, the secrets below, and stdout for the mock notification log.
+  NODE_FUNCTION_ALLOW_BUILTIN: crypto
+  N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+  CODE_ENABLE_STDOUT: "true"
+  # LendLoop integration
+  CONVEX_SITE_URL: ${CONVEX_SITE_URL:?Set CONVEX_SITE_URL in n8n/.env}
+  LENDLOOP_WEBHOOK_SECRET: ${LENDLOOP_WEBHOOK_SECRET:?Set LENDLOOP_WEBHOOK_SECRET in n8n/.env}
+  LENDLOOP_INBOUND_SECRET: ${LENDLOOP_INBOUND_SECRET:?Set LENDLOOP_INBOUND_SECRET in n8n/.env}
+  LENDLOOP_SIMULATE_SEND_FAILURE: ${LENDLOOP_SIMULATE_SEND_FAILURE:-false}
+
+services:
+  # One-shot: imports the workflows from ./workflows and publishes them, then exits.
+  n8n-init:
+    image: n8nio/n8n:2.47.1
+    environment: *n8n-environment
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./workflows:/workflows:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        n8n import:workflow --separate --input=/workflows &&
+        n8n publish:workflow --id=LendLoopErrors01 &&
+        n8n publish:workflow --id=LendLoopNotify01 &&
+        n8n publish:workflow --id=LendLoopOverdue1
+
+  n8n:
+    image: n8nio/n8n:2.47.1
+    restart: unless-stopped
+    depends_on:
+      n8n-init:
+        condition: service_completed_successfully
+    environment: *n8n-environment
+    # Bound to localhost: the editor must not be reachable from the wider network.
+    ports:
+      - "127.0.0.1:5678:5678"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - n8n_data:/home/node/.n8n
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5678/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  # Only needed with a Convex cloud deployment, which can't reach localhost:
+  #   docker compose --profile tunnel up -d  &&  docker compose logs tunnel
+  tunnel:
+    image: cloudflare/cloudflared:2025.10.0
+    profiles: [tunnel]
+    command: tunnel --no-autoupdate --url http://n8n:5678
+    depends_on:
+      - n8n
+
+volumes:
+  n8n_data:

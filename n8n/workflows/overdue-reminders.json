@@ -1,0 +1,272 @@
+{
+  "id": "LendLoopOverdue1",
+  "name": "LendLoop - Overdue Reminders",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "UTC",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": false,
+    "errorWorkflow": "LendLoopErrors01"
+  },
+  "pinData": {},
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "daily",
+      "name": "Daily at 08:00 UTC",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "manual",
+      "name": "Run Manually",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const crypto = require('crypto');\n\n// Same scheme as convex/lib/signature.ts: t=<unix>,v1=hmac_sha256(\"<t>.<METHOD>.<path>.<body>\")\nfunction sign(method, path, body) {\n  const secret = $env.LENDLOOP_INBOUND_SECRET;\n  if (!secret) throw new Error('LENDLOOP_INBOUND_SECRET is not set');\n  const t = Math.floor(Date.now() / 1000);\n  const mac = crypto.createHmac('sha256', secret).update(`${t}.${method}.${path}.${body}`).digest('hex');\n  return `t=${t},v1=${mac}`;\n}\n\nreturn [{ json: { signature: sign('GET', '/n8n/overdue-loans', '') } }];"
+      },
+      "id": "sign-fetch",
+      "name": "Sign Fetch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.CONVEX_SITE_URL }}/n8n/overdue-loans",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-LendLoop-Signature",
+              "value": "={{ $json.signature }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "fetch-overdue-loans",
+      "name": "Fetch Overdue Loans",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        80
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// No overdue loans means no items, and the run ends here successfully.\nreturn ($input.first().json.loans || []).map((loan) => ({ json: loan }));"
+      },
+      "id": "split-loans",
+      "name": "Split Loans",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// MOCK SENDER. In production, replace the send() body with a real provider call.\n// Retries inline and reports per loan, so one bad address can't lose the results of the others.\nconst { reminderKey, toolName, endDate, daysOverdue, recipient } = $json;\n\nasync function send() {\n  if ($env.LENDLOOP_SIMULATE_SEND_FAILURE === 'true') {\n    throw new Error('Simulated reminder provider outage');\n  }\n  const [local, domain] = recipient.email.split('@');\n  const days = daysOverdue === 1 ? '1 day' : `${daysOverdue} days`;\n  console.log(JSON.stringify({\n    type: 'lendloop.reminder.sent',\n    reminderKey,\n    to: `${local.slice(0, 1)}***@${domain}`,\n    message: `Hi ${recipient.firstName}, the ${toolName} was due back on ${endDate} (${days} ago). Please return it soon.`,\n  }));\n}\n\nconst MAX_TRIES = 3;\nlet lastError = 'Unknown error';\nfor (let attempt = 1; attempt <= MAX_TRIES; attempt++) {\n  try {\n    await send();\n    return { json: { reminderKey, status: 'sent' } };\n  } catch (error) {\n    lastError = String(error.message).slice(0, 300);\n    if (attempt < MAX_TRIES) await new Promise((resolve) => setTimeout(resolve, 2000));\n  }\n}\nreturn { json: { reminderKey, status: 'failed', error: lastError } };"
+      },
+      "id": "send-reminder-mock-",
+      "name": "Send Reminder (mock)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const crypto = require('crypto');\n\n// Same scheme as convex/lib/signature.ts: t=<unix>,v1=hmac_sha256(\"<t>.<METHOD>.<path>.<body>\")\nfunction sign(method, path, body) {\n  const secret = $env.LENDLOOP_INBOUND_SECRET;\n  if (!secret) throw new Error('LENDLOOP_INBOUND_SECRET is not set');\n  const t = Math.floor(Date.now() / 1000);\n  const mac = crypto.createHmac('sha256', secret).update(`${t}.${method}.${path}.${body}`).digest('hex');\n  return `t=${t},v1=${mac}`;\n}\n\nconst results = $input.all().map((item) => item.json);\nconst body = JSON.stringify({ executionId: String($execution.id), results });\nreturn [{\n  json: {\n    body,\n    signature: sign('POST', '/n8n/reminder-status', body),\n    failed: results.filter((result) => result.status === 'failed').length,\n    total: results.length,\n  },\n}];"
+      },
+      "id": "build-write-back",
+      "name": "Build Write-back",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CONVEX_SITE_URL }}/n8n/reminder-status",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-LendLoop-Signature",
+              "value": "={{ $json.signature }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "write-back-results",
+      "name": "Write Back Results",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        80
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Results are saved by now. Failing the run here sends it to the error workflow, so a reminder\n// that couldn't be delivered raises an alert instead of sitting quietly in a table.\nconst { failed, total } = $('Build Write-back').first().json;\nif (failed > 0) throw new Error(`${failed} of ${total} overdue reminders failed to send`);\nreturn [{ json: { total, failed: 0 } }];"
+      },
+      "id": "raise-if-any-failed",
+      "name": "Raise If Any Failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        80
+      ]
+    }
+  ],
+  "connections": {
+    "Daily at 08:00 UTC": {
+      "main": [
+        [
+          {
+            "node": "Sign Fetch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Manually": {
+      "main": [
+        [
+          {
+            "node": "Sign Fetch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign Fetch": {
+      "main": [
+        [
+          {
+            "node": "Fetch Overdue Loans",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Overdue Loans": {
+      "main": [
+        [
+          {
+            "node": "Split Loans",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Loans": {
+      "main": [
+        [
+          {
+            "node": "Send Reminder (mock)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Reminder (mock)": {
+      "main": [
+        [
+          {
+            "node": "Build Write-back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Write-back": {
+      "main": [
+        [
+          {
+            "node": "Write Back Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Back Results": {
+      "main": [
+        [
+          {
+            "node": "Raise If Any Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

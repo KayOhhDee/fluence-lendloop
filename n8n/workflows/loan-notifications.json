@@ -1,0 +1,260 @@
+{
+  "id": "LendLoopNotify01",
+  "name": "LendLoop - Loan Notifications",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "UTC",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": false,
+    "errorWorkflow": "LendLoopErrors01"
+  },
+  "pinData": {},
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lendloop-loan-events",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "webhook",
+      "name": "Loan Event Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        100
+      ],
+      "webhookId": "lendloop-loan-events"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const crypto = require('crypto');\n\nconst secret = $env.LENDLOOP_WEBHOOK_SECRET;\nif (!secret) throw new Error('LENDLOOP_WEBHOOK_SECRET is not set');\n\nconst PATH = '/webhook/lendloop-loan-events';\nconst TOLERANCE_SECONDS = 300;\n\nconst item = $input.first();\n// The HMAC covers the exact bytes Convex sent, so verify the raw body rather than parsed JSON.\nconst raw = (await this.helpers.getBinaryDataBuffer(0, 'data')).toString('utf8');\nconst header = item.json.headers['x-lendloop-signature'] || '';\nconst match = header.match(/^t=(\\d{1,12}),v1=([0-9a-f]{64})$/i);\n\nlet valid = false;\nif (match) {\n  const t = Number(match[1]);\n  const fresh = Math.abs(Date.now() / 1000 - t) <= TOLERANCE_SECONDS;\n  const expected = crypto.createHmac('sha256', secret).update(`${t}.POST.${PATH}.${raw}`).digest();\n  const given = Buffer.from(match[2], 'hex');\n  valid = fresh && crypto.timingSafeEqual(expected, given);\n}\nif (!valid) return [{ json: { valid: false } }];\n\n// Allowlist: nothing else from the request travels further through this workflow.\nconst { eventId, event, toolName, startDate, endDate, recipient } = JSON.parse(raw);\nreturn [{ json: { valid: true, eventId, event, toolName, startDate, endDate, recipient } }];"
+      },
+      "id": "verify-signature",
+      "name": "Verify Signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "signature-valid",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "signature-valid",
+      "name": "Signature Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        440,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"error\":\"invalid_signature\"}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "reject-request",
+      "name": "Reject Request",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// MOCK SENDER. In production, replace this node with an Email/Slack node using an n8n credential.\n// The address is masked in logs: the mock proves routing without writing personal data to stdout.\nconst { eventId, event, toolName, startDate, endDate, recipient } = $input.first().json;\n\nif ($env.LENDLOOP_SIMULATE_SEND_FAILURE === 'true') {\n  throw new Error('Simulated notification provider outage');\n}\n\nconst dates = `${startDate} to ${endDate}`;\nconst MESSAGES = {\n  'loan.requested': `A neighbor would like to borrow your ${toolName} (${dates}).`,\n  'loan.approved': `Good news: your request for the ${toolName} (${dates}) was approved.`,\n  'loan.declined': `Your request for the ${toolName} (${dates}) was declined.`,\n  'loan.cancelled': `The loan of the ${toolName} (${dates}) was cancelled.`,\n  'loan.returned': `The ${toolName} was marked as returned. Thanks for borrowing responsibly!`,\n};\nconst text = MESSAGES[event];\nif (!text) throw new Error(`Unknown event type: ${event}`);\n\nconst [local, domain] = recipient.email.split('@');\nconsole.log(JSON.stringify({\n  type: 'lendloop.notification.sent',\n  eventId,\n  event,\n  to: `${local.slice(0, 1)}***@${domain}`,\n  message: `Hi ${recipient.firstName}! ${text}`,\n}));\n\nreturn [{ json: { eventId } }];"
+      },
+      "id": "send-notification-mock-",
+      "name": "Send Notification (mock)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const crypto = require('crypto');\n\n// Same scheme as convex/lib/signature.ts: t=<unix>,v1=hmac_sha256(\"<t>.<METHOD>.<path>.<body>\")\nfunction sign(method, path, body) {\n  const secret = $env.LENDLOOP_INBOUND_SECRET;\n  if (!secret) throw new Error('LENDLOOP_INBOUND_SECRET is not set');\n  const t = Math.floor(Date.now() / 1000);\n  const mac = crypto.createHmac('sha256', secret).update(`${t}.${method}.${path}.${body}`).digest('hex');\n  return `t=${t},v1=${mac}`;\n}\n\nconst body = JSON.stringify({ eventId: $input.first().json.eventId });\nreturn [{ json: { body, signature: sign('POST', '/n8n/notification-status', body) } }];"
+      },
+      "id": "sign-write-back",
+      "name": "Sign Write-back",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CONVEX_SITE_URL }}/n8n/notification-status",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-LendLoop-Signature",
+              "value": "={{ $json.signature }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "write-back-delivered",
+      "name": "Write Back Delivered",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"ok\":true}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "respond-ok",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1320,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Loan Event Webhook": {
+      "main": [
+        [
+          {
+            "node": "Verify Signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Signature": {
+      "main": [
+        [
+          {
+            "node": "Signature Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signature Valid?": {
+      "main": [
+        [
+          {
+            "node": "Send Notification (mock)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Notification (mock)": {
+      "main": [
+        [
+          {
+            "node": "Sign Write-back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign Write-back": {
+      "main": [
+        [
+          {
+            "node": "Write Back Delivered",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Back Delivered": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

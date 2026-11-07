@@ -1,0 +1,127 @@
+{
+  "id": "LendLoopErrors01",
+  "name": "LendLoop - Error Handler",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "UTC",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": false
+  },
+  "pinData": {},
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "error-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const crypto = require('crypto');\n\n// Same scheme as convex/lib/signature.ts: t=<unix>,v1=hmac_sha256(\"<t>.<METHOD>.<path>.<body>\")\nfunction sign(method, path, body) {\n  const secret = $env.LENDLOOP_INBOUND_SECRET;\n  if (!secret) throw new Error('LENDLOOP_INBOUND_SECRET is not set');\n  const t = Math.floor(Date.now() / 1000);\n  const mac = crypto.createHmac('sha256', secret).update(`${t}.${method}.${path}.${body}`).digest('hex');\n  return `t=${t},v1=${mac}`;\n}\n\nconst { execution, trigger, workflow } = $input.first().json;\n\n// Metadata only. Provider errors can quote addresses, so those are scrubbed before they leave n8n.\nconst raw = execution?.error?.message || trigger?.error?.message || 'Unknown workflow error';\nconst message = String(raw).replace(/[^\\s@]+@[^\\s@]+/g, '[redacted]').slice(0, 300);\nconst executionId = String(execution?.id || `trigger-${workflow?.id}-${Date.now()}`);\n\nconst report = { executionId, workflow: workflow?.name || 'Unknown workflow', message };\nif (execution?.lastNodeExecuted) report.node = execution.lastNodeExecuted;\n\nconst body = JSON.stringify(report);\nreturn [{ json: { body, signature: sign('POST', '/n8n/workflow-failures', body), report } }];"
+      },
+      "id": "build-failure-report",
+      "name": "Build Failure Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CONVEX_SITE_URL }}/n8n/workflow-failures",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-LendLoop-Signature",
+              "value": "={{ $json.signature }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "store-failure-in-convex",
+      "name": "Store Failure in Convex",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// The last line of defense: this reaches the container logs even if Convex can't be reached.\nconst { report } = $('Build Failure Report').first().json;\nconst stored = !$json.error;\nconsole.error(JSON.stringify({ type: 'lendloop.workflow.failed', storedInConvex: stored, ...report }));\nreturn [{ json: { stored } }];"
+      },
+      "id": "log-alert",
+      "name": "Log Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Build Failure Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Failure Report": {
+      "main": [
+        [
+          {
+            "node": "Store Failure in Convex",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Failure in Convex": {
+      "main": [
+        [
+          {
+            "node": "Log Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
