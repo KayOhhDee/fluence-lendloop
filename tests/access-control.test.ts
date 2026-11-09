@@ -55,6 +55,34 @@ describe("account setup", () => {
     expect((await admin.as.query(api.users.me, {}))?.role).toBe("admin");
   });
 
+  test("a token without name or email claims keeps the stored profile", async () => {
+    const t = setup();
+    const tokenIdentifier = "test|sparse";
+    await t.withIdentity({ tokenIdentifier, name: "Real Name", email: "real@example.test" }).mutation(
+      api.users.ensureCurrent,
+      {},
+    );
+
+    await t.withIdentity({ tokenIdentifier }).mutation(api.users.ensureCurrent, {});
+
+    const stored = await t.run((ctx) => ctx.db.query("users").first());
+    expect(stored).toMatchObject({ name: "Real Name", email: "real@example.test" });
+  });
+
+  test("a token with new claims still updates the stored profile", async () => {
+    const t = setup();
+    const tokenIdentifier = "test|renamed";
+    await t.withIdentity({ tokenIdentifier }).mutation(api.users.ensureCurrent, {});
+    expect((await t.run((ctx) => ctx.db.query("users").first()))?.name).toBe("Neighbor");
+
+    await t
+      .withIdentity({ tokenIdentifier, givenName: "Ama", familyName: "Boateng", email: "ama@example.test" })
+      .mutation(api.users.ensureCurrent, {});
+
+    const stored = await t.run((ctx) => ctx.db.query("users").first());
+    expect(stored).toMatchObject({ name: "Ama Boateng", email: "ama@example.test" });
+  });
+
   test("roles change through the internal function", async () => {
     const t = setup();
     const person = await addUser(t, "person");

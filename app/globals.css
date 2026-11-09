@@ -2,7 +2,7 @@
 
 @theme {
   --font-sans: var(--font-body), ui-sans-serif, system-ui, sans-serif;
-  --font-display: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-heading), ui-sans-serif, system-ui, sans-serif;
 
   --color-paper: #f7f5ef;
   --color-card: #fffefb;
@@ -16,6 +16,23 @@
   --color-amber-soft: #fbf0d6;
   --color-danger: #a8321f;
   --color-danger-soft: #fae8e4;
+
+  --shadow-card: 0 1px 2px rgb(29 42 36 / 0.05);
+  --shadow-raised: 0 4px 14px rgb(29 42 36 / 0.09);
+  --shadow-dialog: 0 18px 50px rgb(29 42 36 / 0.25);
+
+  --animate-dialog-in: dialog-in 160ms ease-out;
+  @keyframes dialog-in {
+    from {
+      opacity: 0;
+      transform: translateY(8px) scale(0.98);
+    }
+  }
+}
+
+html {
+  /* Keeps pages from shifting sideways as their content grows past the fold. */
+  overflow-y: scroll;
 }
 
 body {
@@ -33,23 +50,45 @@ dialog::backdrop {
   background: rgb(29 42 36 / 0.45);
 }
 
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 @layer components {
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-line bg-card px-3.5 py-2 text-sm font-medium text-ink transition-colors hover:bg-paper disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex min-h-10 cursor-pointer items-center justify-center gap-2 rounded-lg border border-line bg-card px-3.5 py-2 text-sm font-medium text-ink transition-colors hover:bg-paper disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
     @apply border-brand bg-brand text-white hover:bg-brand-dark;
   }
+  .btn-soft {
+    @apply border-transparent bg-brand-soft text-brand-dark hover:border-brand/30 hover:bg-brand-soft;
+  }
   .btn-danger {
     @apply border-danger/30 text-danger hover:bg-danger-soft;
   }
+  .btn-danger-solid {
+    @apply border-danger bg-danger text-white hover:bg-danger/90;
+  }
   .field {
-    @apply w-full rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink;
+    @apply min-h-10 w-full rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink transition-colors placeholder:text-muted/70 hover:border-muted/50;
   }
   .label {
     @apply mb-1 block text-sm font-medium;
   }
   .card {
-    @apply rounded-xl border border-line bg-card;
+    @apply rounded-xl border border-line bg-card shadow-card;
+  }
+  .chip {
+    @apply min-h-8 cursor-pointer whitespace-nowrap rounded-full border border-line bg-card px-3 py-1 text-sm text-muted transition-colors hover:text-ink;
+  }
+  .chip-active {
+    @apply border-ink bg-ink text-white hover:text-white;
   }
 }

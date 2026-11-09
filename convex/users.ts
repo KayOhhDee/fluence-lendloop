@@ -13,7 +13,10 @@ export const ensureCurrent = mutation({
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw appError("UNAUTHENTICATED", "Please sign in.");
 
-    const name = identity.name?.trim() || identity.givenName?.trim() || "Neighbor";
+    const name =
+      identity.name?.trim() ||
+      [identity.givenName?.trim(), identity.familyName?.trim()].filter(Boolean).join(" ") ||
+      undefined;
     const email = identity.email;
     const existing = await ctx.db
       .query("users")
@@ -23,14 +26,17 @@ export const ensureCurrent = mutation({
     if (!existing) {
       return ctx.db.insert("users", {
         tokenIdentifier: identity.tokenIdentifier,
-        name,
+        name: name ?? "Neighbor",
         email,
         role: "user",
         trustedLender: false,
       });
     }
-    if (existing.name !== name || existing.email !== email) {
-      await ctx.db.patch(existing._id, { name, email });
+    // A token without these claims says nothing about them, so it must not erase what's stored.
+    const nextName = name ?? existing.name;
+    const nextEmail = email ?? existing.email;
+    if (existing.name !== nextName || existing.email !== nextEmail) {
+      await ctx.db.patch(existing._id, { name: nextName, email: nextEmail });
     }
     return existing._id;
   },

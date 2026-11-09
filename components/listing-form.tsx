@@ -42,6 +42,8 @@ export function ListingForm({ listing, onDone }: { listing?: EditableListing; on
           id="tool-name"
           className="field"
           required
+          data-autofocus={listing ? undefined : true}
+          placeholder="Cordless drill"
           maxLength={LIMITS.toolName}
           value={name}
           onChange={(event) => setName(event.target.value)}
@@ -92,10 +94,15 @@ export function ListingForm({ listing, onDone }: { listing?: EditableListing; on
           className="field"
           rows={3}
           required
+          placeholder="What it's good for, and anything a borrower should know."
           maxLength={LIMITS.toolDescription}
+          aria-describedby="tool-description-count"
           value={description}
           onChange={(event) => setDescription(event.target.value)}
         />
+        <p id="tool-description-count" className="mt-1 text-right text-xs text-muted">
+          {description.length} of {LIMITS.toolDescription} characters
+        </p>
       </div>
       <ErrorNote message={error} />
       <div className="flex justify-end gap-2">

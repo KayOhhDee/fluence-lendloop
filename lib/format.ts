@@ -1,4 +1,5 @@
 import { ConvexError } from "convex/values";
+import { addDays } from "@/convex/lib/dates";
 import { CATEGORIES, CONDITIONS, type Category, type Condition } from "@/convex/lib/domain";
 
 export function categoryLabel(value: Category): string {
@@ -37,6 +38,15 @@ export function timeAgo(timestamp: number): string {
 export function localToday(): string {
   const now = new Date();
   return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+}
+
+/** The earliest day on or after `from` that no booking covers. */
+export function firstFreeDay(from: string, booked: { startDate: string; endDate: string }[]): string {
+  let day = from;
+  for (const range of [...booked].sort((a, b) => a.startDate.localeCompare(b.startDate))) {
+    if (range.startDate <= day && day <= range.endDate) day = addDays(range.endDate, 1);
+  }
+  return day;
 }
 
 /** Only errors the backend raised on purpose are shown to people; anything else stays generic. */
